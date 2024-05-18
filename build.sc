@@ -1,12 +1,13 @@
-import $ivy.`de.tototec::de.tobiasroeser.mill.vcs.version::0.3.0`
-import $ivy.`io.github.alexarchambault.mill::mill-native-image::0.1.23`
-import $ivy.`io.github.alexarchambault.mill::mill-native-image-upload:0.1.19`
+import $ivy.`de.tototec::de.tobiasroeser.mill.vcs.version::0.4.0`
+import $ivy.`io.github.alexarchambault.mill::mill-native-image::0.1.26`
+import $ivy.`io.github.alexarchambault.mill::mill-native-image-upload:0.1.26`
 import $ivy.`io.get-coursier::coursier-launcher:2.1.0-M2`
 
 import de.tobiasroeser.mill.vcs.version._
 import io.github.alexarchambault.millnativeimage.NativeImage
 import io.github.alexarchambault.millnativeimage.upload.Upload
 import mill._
+import mill.api.Ctx
 import mill.scalalib._
 import coursier.core.Version
 
@@ -21,10 +22,11 @@ def scala213 = "2.13.10"
 def latestScalaJsVersion = "1.13.1"
 def scalaJsVersions = Seq("1.9.0", "1.10.0", "1.10.1", "1.11.0", "1.12.0", latestScalaJsVersion)
 
-object cli extends Cross[Cli](scalaJsVersions: _*)
+object cli extends Cross[Cli](scalaJsVersions)
 
-class Cli(val scalaJsVersion0: String) extends ScalaModule with ScalaJsCliPublishModule {
+trait Cli extends ScalaModule with ScalaJsCliPublishModule with Cross.Module[String] {
   def scalaVersion = scala213
+  def scalaJsVersion0 = crossValue
   def artifactName = "scalajs" + super.artifactName()
   def ivyDeps = super.ivyDeps() ++ Seq(
     ivy"org.scala-js::scalajs-linker:$scalaJsVersion0",
@@ -107,7 +109,8 @@ class Cli(val scalaJsVersion0: String) extends ScalaModule with ScalaJsCliPublis
   }
 }
 
-class ScalaJsCliNativeImage(val scalaJsVersion0: String) extends ScalaModule with NativeImage {
+trait ScalaJsCliNativeImage extends ScalaModule with NativeImage with Cross.Module[String] {
+  def scalaJsVersion0 = crossValue
   def scalaVersion = scala213
   def scalaJsVersion = scalaJsVersion0
 
@@ -146,13 +149,13 @@ class ScalaJsCliNativeImage(val scalaJsVersion0: String) extends ScalaModule wit
   }
 }
 
-object native extends Cross[ScalaJsCliNativeImage](scalaJsVersions: _*)
+object native extends Cross[ScalaJsCliNativeImage](scalaJsVersions)
 
 def native0 = native
 
 def csDockerVersion = "2.1.0-M5-18-gfebf9838c"
 
-class ScalaJsCliStaticNativeImage(scalaJsVersion0: String) extends ScalaJsCliNativeImage(scalaJsVersion0) {
+trait ScalaJsCliStaticNativeImage extends ScalaJsCliNativeImage {
   def nameSuffix = "-static"
   def buildHelperImage = T {
     os.proc("docker", "build", "-t", "scala-cli-base-musl:latest", ".")
@@ -173,9 +176,9 @@ class ScalaJsCliStaticNativeImage(scalaJsVersion0: String) extends ScalaJsCliNat
     super.writeNativeImageScript(scriptDest, imageDest)()
   }
 }
-object `native-static` extends Cross[ScalaJsCliStaticNativeImage](scalaJsVersions: _*)
+object `native-static` extends Cross[ScalaJsCliStaticNativeImage](scalaJsVersions)
 
-class ScalaJsCliMostlyStaticNativeImage(scalaJsVersion0: String) extends ScalaJsCliNativeImage(scalaJsVersion0) {
+trait ScalaJsCliMostlyStaticNativeImage extends ScalaJsCliNativeImage {
   def nameSuffix = "-mostly-static"
   def nativeImageDockerParams = Some(
     NativeImage.linuxMostlyStaticParams(
@@ -184,13 +187,14 @@ class ScalaJsCliMostlyStaticNativeImage(scalaJsVersion0: String) extends ScalaJs
     )
   )
 }
-object `native-mostly-static` extends Cross[ScalaJsCliMostlyStaticNativeImage](scalaJsVersions: _*)
+object `native-mostly-static` extends Cross[ScalaJsCliMostlyStaticNativeImage](scalaJsVersions)
 
-object tests extends Cross[Tests](scalaJsVersions: _*)
-class Tests(val scalaJsVersion0: String) extends ScalaModule {
+object tests extends Cross[Tests](scalaJsVersions)
+trait Tests extends ScalaModule with Cross.Module[String] {
   def scalaVersion = scala213
+  def scalaJsVersion0 = crossValue
 
-  object test extends Tests {
+  object test extends ScalaTests {
     def ivyDeps = super.ivyDeps() ++ Seq(
       ivy"org.scalameta::munit:0.7.29",
       ivy"com.lihaoyi::os-lib:0.9.0",
@@ -337,7 +341,7 @@ object ci extends Module {
   private def publishSonatype0(
       data: Seq[PublishModule.PublishData],
       log: mill.api.Logger
-  ): Unit = {
+  )(implicit ctx: Ctx): Unit = {
 
     val credentials = sys.env("SONATYPE_USERNAME") + ":" + sys.env("SONATYPE_PASSWORD")
     val pgpPassword = sys.env("PGP_PASSPHRASE")
@@ -375,6 +379,8 @@ object ci extends Module {
       readTimeout = timeout.toMillis.toInt,
       connectTimeout = timeout.toMillis.toInt,
       log = log,
+      workspace = T.workspace,
+      env = T.env,
       awaitTimeout = timeout.toMillis.toInt,
       stagingRelease = isRelease
     )
@@ -386,7 +392,7 @@ object ci extends Module {
 
     val path = os.Path(directory, os.pwd)
     val launchers = os.list(path).filter(os.isFile(_)).map { path =>
-      path.toNIO -> path.last
+      path -> path.last
     }
     val ghToken = Option(System.getenv("UPLOAD_GH_TOKEN")).getOrElse {
       sys.error("UPLOAD_GH_TOKEN not set")
