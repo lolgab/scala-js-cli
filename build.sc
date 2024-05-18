@@ -32,8 +32,6 @@ trait Cli extends ScalaModule with ScalaJsCliPublishModule with CrossScalaJSScal
     ivy"org.scala-js::scalajs-linker:$scalaJsVersion",
     ivy"com.github.scopt::scopt:4.1.0"
   )
-  def millSourcePath   = super.millSourcePath / os.up
-
   def mainClass = Some("org.scalajs.cli.Scalajsld")
 
   def transitiveJars: T[Agg[PathRef]] = {
