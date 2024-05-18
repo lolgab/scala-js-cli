@@ -27,6 +27,7 @@ import java.net.URI
 import java.nio.file.Path
 import java.lang.NoClassDefFoundError
 import org.scalajs.cli.internal.ModuleSplitStyleParser
+import org.scalajs.cli.internal.ScalaJs116Specific._
 
 object Scalajsld {
 
