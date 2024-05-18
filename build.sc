@@ -9,6 +9,7 @@ import io.github.alexarchambault.millnativeimage.upload.Upload
 import mill._
 import mill.api.Ctx
 import mill.scalalib._
+import mill.scalalib.api.ZincWorkerUtil
 import coursier.core.Version
 
 import java.io.File
@@ -24,24 +25,16 @@ def scalaJsVersions = Seq("1.9.0", "1.10.0", "1.10.1", "1.11.0", "1.12.0", lates
 
 object cli extends Cross[Cli](scalaJsVersions)
 
-trait Cli extends ScalaModule with ScalaJsCliPublishModule with Cross.Module[String] {
+trait Cli extends ScalaModule with ScalaJsCliPublishModule with CrossScalaJSScalaModule {
   def scalaVersion = scala213
-  def scalaJsVersion0 = crossValue
   def artifactName = "scalajs" + super.artifactName()
   def ivyDeps = super.ivyDeps() ++ Seq(
-    ivy"org.scala-js::scalajs-linker:$scalaJsVersion0",
+    ivy"org.scala-js::scalajs-linker:$scalaJsVersion",
     ivy"com.github.scopt::scopt:4.1.0"
   )
   def millSourcePath   = super.millSourcePath / os.up
 
   def mainClass = Some("org.scalajs.cli.Scalajsld")
-
-  def sources = T.sources {
-    val extra =
-      if (Version(scalaJsVersion0) == Version("1.9.0")) millSourcePath / "scala-js-1.9"
-      else millSourcePath / "scala-js-1.10+"
-    super.sources() ++ Seq(PathRef(extra))
-  }
 
   def transitiveJars: T[Agg[PathRef]] = {
 
@@ -109,10 +102,8 @@ trait Cli extends ScalaModule with ScalaJsCliPublishModule with Cross.Module[Str
   }
 }
 
-trait ScalaJsCliNativeImage extends ScalaModule with NativeImage with Cross.Module[String] {
-  def scalaJsVersion0 = crossValue
+trait ScalaJsCliNativeImage extends ScalaModule with NativeImage with CrossScalaJSScalaModule {
   def scalaVersion = scala213
-  def scalaJsVersion = scalaJsVersion0
 
   def nativeImageClassPath = T{
     runClasspath()
@@ -129,8 +120,8 @@ trait ScalaJsCliNativeImage extends ScalaModule with NativeImage with Cross.Modu
   def graalVmVersion = "22.3.1"
   def nativeImageGraalVmJvmId = s"graalvm-java17:$graalVmVersion"
   def nativeImageName = "scala-js-ld"
-  def moduleDeps() = Seq(
-    cli(scalaJsVersion0)
+  def moduleDeps = Seq(
+    cli()
   )
   def compileIvyDeps = super.compileIvyDeps() ++ Seq(
     ivy"org.graalvm.nativeimage:svm:$graalVmVersion"
@@ -190,9 +181,8 @@ trait ScalaJsCliMostlyStaticNativeImage extends ScalaJsCliNativeImage {
 object `native-mostly-static` extends Cross[ScalaJsCliMostlyStaticNativeImage](scalaJsVersions)
 
 object tests extends Cross[Tests](scalaJsVersions)
-trait Tests extends ScalaModule with Cross.Module[String] {
+trait Tests extends ScalaModule with CrossScalaJSScalaModule {
   def scalaVersion = scala213
-  def scalaJsVersion0 = crossValue
 
   object test extends ScalaTests {
     def ivyDeps = super.ivyDeps() ++ Seq(
@@ -210,7 +200,7 @@ trait Tests extends ScalaModule with Cross.Module[String] {
           val launcher = launcherTask().path
           val extraArgs = Seq(
             s"-Dtest.scala-js-cli.path=$launcher",
-            s"-Dtest.scala-js-cli.scala-js-version=$scalaJsVersion0"
+            s"-Dtest.scala-js-cli.scala-js-version=$scalaJsVersion"
           )
           args ++ extraArgs
         }
@@ -223,31 +213,13 @@ trait Tests extends ScalaModule with Cross.Module[String] {
     def test(args: String*) =
       jvm(args: _*)
     def jvm(args: String*) =
-      new TestHelper(cli(scalaJsVersion0).standaloneLauncher).test(args: _*)
+      new TestHelper(cli().standaloneLauncher).test(args: _*)
     def native(args: String*) =
-      new TestHelper(native0(scalaJsVersion0).nativeImage).test(args: _*)
+      new TestHelper(native0().nativeImage).test(args: _*)
     def nativeStatic(args: String*) =
-      new TestHelper(`native-static`(scalaJsVersion0).nativeImage).test(args: _*)
+      new TestHelper(`native-static`().nativeImage).test(args: _*)
     def nativeMostlyStatic(args: String*) =
-      new TestHelper(`native-mostly-static`(scalaJsVersion0).nativeImage).test(args: _*)
-
-    private def updateRef(ref: PathRef): PathRef = {
-      val rawPath = ref.path.toString.replace(
-        File.separator + scalaJsVersion0 + File.separator,
-        File.separator
-      )
-      PathRef(os.Path(rawPath))
-    }
-    def sources = T.sources {
-      super.sources().flatMap { ref =>
-        Seq(updateRef(ref), ref)
-      }
-    }
-    def resources = T.sources {
-      super.resources().flatMap { ref =>
-        Seq(updateRef(ref), ref)
-      }
-    }
+      new TestHelper(`native-mostly-static`().nativeImage).test(args: _*)
   }
 }
 
@@ -315,6 +287,27 @@ private def computePublishVersion(state: VcsState, simple: Boolean): String =
     state.lastTag
       .getOrElse(state.format())
       .stripPrefix("v")
+
+trait CrossScalaJSScalaModule extends ScalaModule with Cross.Module[String] {
+  def scalaJsVersion = crossValue
+  def sources = T.sources {
+    val otherVersions =
+      ZincWorkerUtil.matchingVersions(scalaJsVersion) ++
+        ZincWorkerUtil.versionRanges(scalaJsVersion, millOuterCtx.crossValues.map(_.toString))
+    super.sources() ++ otherVersions.map(s => PathRef(millSourcePath / s"scala-js-$s"))
+  }
+  implicit def scalaJSVersionResolver: Cross.Resolver[CrossScalaJSScalaModule] = new Cross.Resolver[CrossScalaJSScalaModule] {
+    def resolve[V <: CrossScalaJSScalaModule](c: mill.define.Cross[V]): V =
+      c.crossModules
+        .find(_.scalaJsVersion == scalaJsVersion)
+        .getOrElse(
+          sys.error(
+            s"Unable to find compatible cross version between $scalaJsVersion and " +
+            c.crossModules.map(_.scalaJsVersion).mkString(",")
+          )
+        )
+  }
+}
 
 private def finalPublishVersion = {
   val isCI = System.getenv("CI") != null
